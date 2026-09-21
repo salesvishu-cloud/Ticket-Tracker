@@ -551,6 +551,8 @@ const SHEET_URL_DEFAULT = 'https://script.google.com/macros/s/AKfycby31gwRyfxpVv
 
 let DBX=null, USERX=null, DLX=null, unsubs=[], SHEET=null, sheetBusy=false;
 let PENDING=new Set(), PENDING_DEL=new Set(), SYNCED=new Set();
+/* saves/deletes made in this browser in the last few minutes (see sheetRefresh) */
+const RECENT=new Map(), RECENT_DEL=new Map();
 const LS='ectrl.v1', LS_SHEET='ectrl.sheet';
 function stripUI(t){ const o=Object.assign({},t); delete o._d; return o; }
 function setSync(mode,status,msg){
@@ -603,6 +605,15 @@ async function sheetRefresh(){
     if(outbox.length){ await sheetCall({action:'putMany',tickets:outbox.map(stripUI)}); outbox.forEach(t=>{PENDING.delete(t.id);SYNCED.add(t.id);}); }
     if(PENDING_DEL.size){ await sheetCall({action:'deleteMany',ids:[...PENDING_DEL]}); PENDING_DEL.clear(); }
     serverIds.forEach(id=>SYNCED.add(id));
+    /* a save or delete made in this browser while the list was loading must not be undone on screen:
+       keep our copy when the server's is missing or older, and keep recent deletes deleted */
+    const cutoff=Date.now()-300000;
+    RECENT.forEach((ts,id)=>{
+      if(ts<cutoff){ RECENT.delete(id); return; }
+      const cur=state.tickets.find(x=>x.id===id), sv=byId.get(id);
+      if(cur && (!sv || String(sv.updatedAt||'')<String(cur.updatedAt||''))) byId.set(id,cur);
+    });
+    RECENT_DEL.forEach((ts,id)=>{ if(ts<cutoff) RECENT_DEL.delete(id); else byId.delete(id); });
     state.tickets=[...byId.values()];
     if(j.settings) state.settings=Object.assign(JSON.parse(JSON.stringify(DEFAULTS)),j.settings);
     saveLocal();
@@ -621,7 +632,7 @@ function handleDbErr(e){
   render({background:true});
 }
 async function putTicket(t){
-  t.updatedAt=new Date().toISOString();
+  t.updatedAt=new Date().toISOString(); RECENT.set(t.id,Date.now());
   const i=state.tickets.findIndex(x=>x.id===t.id);
   if(i<0) state.tickets.push(t); else state.tickets[i]=t;
   if(DBX){ try{ await DBX.collection('tickets').doc(t.id).set(stripUI(t)); }catch(e){ handleDbErr(e); } return; }
@@ -633,7 +644,7 @@ async function putTicket(t){
   saveLocal();
 }
 async function putMany(list){
-  list.forEach(t=>{ t.updatedAt=t.updatedAt||new Date().toISOString(); const i=state.tickets.findIndex(x=>x.id===t.id); if(i<0) state.tickets.push(t); else state.tickets[i]=t; });
+  list.forEach(t=>{ t.updatedAt=t.updatedAt||new Date().toISOString(); RECENT.set(t.id,Date.now()); const i=state.tickets.findIndex(x=>x.id===t.id); if(i<0) state.tickets.push(t); else state.tickets[i]=t; });
   if(DBX){
     for(const t of list){ try{ await DBX.collection('tickets').doc(t.id).set(stripUI(t)); }catch(e){ handleDbErr(e); break; } }
     return;
@@ -649,7 +660,7 @@ async function putMany(list){
 }
 async function delTicket(id){
   state.tickets=state.tickets.filter(t=>t.id!==id);
-  PENDING.delete(id);
+  PENDING.delete(id); RECENT.delete(id); RECENT_DEL.set(id,Date.now());
   if(DBX){ try{ await DBX.collection('tickets').doc(id).delete(); }catch(e){ handleDbErr(e); } return; }
   if(SHEET){
     PENDING_DEL.add(id); saveLocal();
@@ -2042,8 +2053,11 @@ render();
 
 (async function boot(){
   if(!inClaude){
-    if(SHEET && !SHEET.key){ setSync('sheet','error','Team key missing — open Settings → Shared data, type the team key and click Connect & sync.'); render({background:true}); }
-    else if(SHEET){ await sheetRefresh(); startPolling(); render({background:true}); }
+    if(SHEET){ await sheetRefresh();
+      /* the sheet decides whether a key is needed; only nudge for one if it actually asked */
+      if(!SHEET.key && state.sync.status==='error' && /team key/i.test(state.sync.msg)) setSync('sheet','error','Team key missing — open Settings → Shared data, type the team key and click Connect & sync.');
+      else startPolling();
+      render({background:true}); }
     return;
   }
   const c=window.claude;
