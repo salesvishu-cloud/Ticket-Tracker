@@ -547,7 +547,7 @@ function needsActionToday(t,d){ return !d.closed && actionReasons(t,d).length>0;
    localStorage is always kept as a cache + an outbox of changes that have not reached the shared store yet. */
 /* Optional: paste your Apps Script Web App URL here before uploading to GitHub,
    so teammates only have to type the team key. */
-const SHEET_URL_DEFAULT = '';
+const SHEET_URL_DEFAULT = 'https://script.google.com/macros/s/AKfycby31gwRyfxpVv41mQF6A_SrVB65OTaaJG6Jl0eQ76fOrZt9_7DTr2y4Sov4_ptDUYgygQ/exec';
 
 let DBX=null, USERX=null, DLX=null, unsubs=[], SHEET=null, sheetBusy=false;
 let PENDING=new Set(), PENDING_DEL=new Set(), SYNCED=new Set();
@@ -2042,7 +2042,8 @@ render();
 
 (async function boot(){
   if(!inClaude){
-    if(SHEET){ await sheetRefresh(); startPolling(); render({background:true}); }
+    if(SHEET && !SHEET.key){ setSync('sheet','error','Team key missing — open Settings → Shared data, type the team key and click Connect & sync.'); render({background:true}); }
+    else if(SHEET){ await sheetRefresh(); startPolling(); render({background:true}); }
     return;
   }
   const c=window.claude;
